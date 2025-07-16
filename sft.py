@@ -553,6 +553,121 @@ if st.button("📊 Avaliar política pré-definida"):
     colm2.metric(label="📈 MTBOF (h)", value=f"{MTBOF_manual:.2f}")
 
 # =============================================================================
+# FUNÇÃO DA ANÁLISE DE SENSIBILIDADE (com MTBOF incluído)
+# =============================================================================
+
+def analise_sensibilidade(Q, S, T, parametros_base, n_simulacoes=n_simulacoes, variacoes_parametros=None, parametros_alvo=None):
+    if parametros_alvo is None:
+        parametros_alvo = list(parametros_base.keys())
+
+    if variacoes_parametros is None:
+        variacoes_parametros = {param: 0.1 for param in parametros_alvo}
+
+    resultados = []
+    parametros_iniciais = {param: parametros_base[param] for param in parametros_alvo}
+    parametros_finais = {param: [] for param in parametros_alvo}
+
+    for _ in range(n_simulacoes):
+        parametros_simulados = parametros_base.copy()
+        for param in parametros_alvo:
+            variacao = variacoes_parametros.get(param, 0.1)
+            perturbacao = np.random.uniform(1 - variacao, 1 + variacao)
+            parametros_simulados[param] *= perturbacao
+            parametros_finais[param].append(parametros_simulados[param])
+
+        custo = taxa_custo(Q, S, T, **parametros_simulados)
+        mtbof = MTBOF(Q, S, T, **parametros_simulados)
+
+        resultados.append({'Custo': custo, 'MTBOF': mtbof})
+
+    df_resultados = pd.DataFrame(resultados)
+    estatisticas = df_resultados.agg(['mean', 'std']).T
+    estatisticas.columns = ['Média', 'Desvio Padrão']
+
+    parametros_finais = {param: np.mean(valores) for param, valores in parametros_finais.items()}
+
+    return df_resultados, estatisticas, parametros_iniciais, parametros_finais
+
+# =============================================================================
+# ANÁLISE DE SENSIBILIDADE - INTERFACE (com MTBOF incluído)
+# =============================================================================
+st.subheader("📉 Análise de Sensibilidade para política pré-definida.")
+n_simulacoes = st.number_input("Tamanho da amostra", min_value=100, max_value=500, value=100, step=100)
+
+# Seleção dos parâmetros a serem variáveis
+st.markdown("### Selecione os Parâmetros com imprecisão na estimativa (%)")
+parametros_disponiveis = ['betax', 'etax', 'betah', 'etah', 'lambd', 'Ci', 'Co', 'Cp', 'Cf', 'Dp', 'Df']
+variacoes_parametros = {}
+
+for param in parametros_disponiveis:
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        incluir = st.checkbox(f"{param}", value=True)
+    with col2:
+        variacao = st.slider(f"Nível de imprecisão para {param}", 1, 100, 10, 1) / 100 if incluir else 0
+        variacoes_parametros[param] = variacao
+
+# Valores ótimos da política pré-definida
+Q_usado = st.session_state['Q_manual']
+S_usado = st.session_state['S_manual']
+T_usado = st.session_state['T_manual']
+
+if st.button("🚀 Iniciar Análise de Sensibilidade"):
+    with st.spinner("⏳ Executando a análise de sensibilidade..."):
+        parametros_base = {
+            'betax': betax, 'etax': etax, 'betah': betah, 'etah': etah,
+            'lambd': lambd, 'Ci': Ci, 'Co': Co, 'Cp': Cp, 'Cf': Cf, 'Dp': Dp, 'Df': Df
+        }
+
+        df_resultados, estatisticas, parametros_iniciais, parametros_finais = analise_sensibilidade(
+            Q_usado, S_usado, T_usado,
+            parametros_base,
+            n_simulacoes=n_simulacoes,
+            variacoes_parametros=variacoes_parametros,
+            parametros_alvo=parametros_disponiveis
+        )
+
+        # Renomear coluna se necessário
+        estatisticas.rename(columns={"Desvio Padrão": "Desvio-padrão", "Desvio": "Desvio-padrão"}, inplace=True)
+
+        st.subheader("Box-plots dos Resultados")
+
+        fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+        # Boxplot da Taxa de Custo
+        ax[0].boxplot(df_resultados['Custo'], vert=False, patch_artist=True, boxprops=dict(facecolor='skyblue'))
+        media_custo = df_resultados['Custo'].mean()
+        std_custo = df_resultados['Custo'].std()
+        ax[0].set_title('Box-plot para taxa de custo', loc='left', fontsize=12, color='black')
+        ax[0].text(0.01, 1.25,
+                   f"Média = {media_custo:.4f}\nDesvio-padrão = {std_custo:.4f}",
+                   transform=ax[0].transAxes,
+                   fontsize=10,
+                   color='black',
+                   verticalalignment='top',
+                   horizontalalignment='left')
+
+        # Boxplot do MTBOF
+        ax[1].boxplot(df_resultados['MTBOF'], vert=False, patch_artist=True, boxprops=dict(facecolor='lightgreen'))
+        media_mtbof = df_resultados['MTBOF'].mean()
+        std_mtbof = df_resultados['MTBOF'].std()
+        ax[1].set_title('Box-plot para tempo médio entre eventos de falha', loc='left', fontsize=12, color='black')
+        ax[1].text(0.01, 1.25,
+                   f"Média = {media_mtbof:.4f}\nDesvio-padrão = {std_mtbof:.4f}",
+                   transform=ax[1].transAxes,
+                   fontsize=10,
+                   color='black',
+                   verticalalignment='top',
+                   horizontalalignment='left')
+
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        st.image(buf)
+
+# =============================================================================
 # Rodapé
 # =============================================================================
 st.markdown("""
